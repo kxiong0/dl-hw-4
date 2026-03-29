@@ -120,9 +120,9 @@ class TransformerPlanner(nn.Module):
         self,
         n_track: int = 10,
         n_waypoints: int = 3,
-        d_model: int = 32,
+        d_model: int = 64,
         num_heads = 8,
-        n_blocks = 15,
+        n_blocks = 5,
     ):
         super().__init__()
 

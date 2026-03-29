@@ -3,9 +3,9 @@ import torch.utils.tensorboard as tb
 
 from datetime import datetime
 from pathlib import Path
-from models import load_model, save_model
-from metrics import PlannerMetric
-from datasets.road_dataset import load_data
+from .models import load_model, save_model
+from .metrics import PlannerMetric
+from .datasets.road_dataset import load_data
 
 
 def train(exp_dir: str = "transformer_logs", num_epoch=10, batch_size=512, lr=0.01):
@@ -35,10 +35,10 @@ def train(exp_dir: str = "transformer_logs", num_epoch=10, batch_size=512, lr=0.
     )
     val_data = load_data("../drive_data/val", shuffle=False, transform_pipeline="state_only", num_workers=4)
 
-    loss_func_long = torch.nn.SmoothL1Loss()
-    loss_func_lat = torch.nn.MSELoss()
+    loss_func_long = torch.nn.L1Loss()
+    loss_func_lat = torch.nn.L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.25)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.25)
 
     global_step = 0
     train_metric_computer = PlannerMetric()
@@ -70,7 +70,7 @@ def train(exp_dir: str = "transformer_logs", num_epoch=10, batch_size=512, lr=0.
             watpoints_lat= waypoints_masked[..., 1]
 
             loss_val = loss_func_long(out_long, watpoints_long)
-            loss_val += loss_func_lat(out_lat, watpoints_lat)
+            loss_val += 3.0 * loss_func_lat(out_lat, watpoints_lat)
             loss_val.backward()
             
             logger.add_scalar("train_loss", loss_val, global_step)
