@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from torchvision import transforms as tv_transforms
+from torchvision.transforms import v2
 
 from .road_utils import Track, homogeneous
 
@@ -156,6 +157,12 @@ class RandomHorizontalFlip(tv_transforms.RandomHorizontalFlip):
             sample["image"] = np.flip(sample["image"], axis=2)
             sample["track"] = np.flip(sample["track"], axis=1)
 
+        return sample
+
+class RandomColorJitter(v2.ColorJitter):
+    def __call__(self, sample: dict):
+        img = super().__call__(sample["image"])
+        sample["image"] = img
         return sample
 
 

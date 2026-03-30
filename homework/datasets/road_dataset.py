@@ -50,7 +50,13 @@ class RoadDataset(Dataset):
             xform = road_transforms.EgoTrackProcessor(self.track)
         elif transform_pipeline == "aug":
             # add your custom augmentations here
-            pass
+            xform = road_transforms.Compose(
+                [
+                    road_transforms.ImageLoader(self.episode_path),
+                    road_transforms.EgoTrackProcessor(self.track),
+                    road_transforms.RandomColorJitter(0.2, 0.2, 0.2, 0.2),
+                ]
+            )
 
         if xform is None:
             raise ValueError(f"Invalid transform {transform_pipeline} specified!")

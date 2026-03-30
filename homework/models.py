@@ -112,7 +112,7 @@ class TransformerPlanner(nn.Module):
             x = self.in_norm(x)
             x = x + self.mha(x, x, x)[0]
             x = x + self.mlp(self.out_norm(x))
-            
+
             # output size: (B, n_track, d_model)
             return x
 
@@ -120,9 +120,9 @@ class TransformerPlanner(nn.Module):
         self,
         n_track: int = 10,
         n_waypoints: int = 3,
-        d_model: int = 64,
-        num_heads = 8,
-        n_blocks = 5,
+        d_model: int = 32,
+        num_heads=8,
+        n_blocks=15,
     ):
         super().__init__()
 
@@ -134,27 +134,23 @@ class TransformerPlanner(nn.Module):
 
         self.query_embed = nn.Embedding(n_waypoints, d_model)
         self.track_pos_embed = nn.Parameter(torch.zeros(1, n_track, d_model))
-        
+
         # to transform last dim of tracks to d_model
         # 2 * 2 because concating left and right track
         self.projection = torch.nn.Linear(2 * 2, d_model)
 
         self.mhas = nn.ModuleList()
         self.blocks = nn.ModuleList()
-        
+
         for _ in range(n_blocks):
             self.mhas.append(
                 # assuming all q k v have same dims
                 nn.MultiheadAttention(
-                    embed_dim=d_model,
-                    kdim=d_model,
-                    vdim=d_model,
-                    num_heads=num_heads,
-                    batch_first=True
+                    embed_dim=d_model, kdim=d_model, vdim=d_model, num_heads=num_heads, batch_first=True
                 )
             )
             self.blocks.append(TransformerPlanner.Block(d_model, num_heads))
-        
+
         decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=num_heads, batch_first=True, norm_first=True)
         self.transformer = nn.TransformerDecoder(decoder_layer, n_blocks)
 
@@ -184,11 +180,11 @@ class TransformerPlanner(nn.Module):
         track = torch.cat([track_left, track_right], dim=2)
         # output size: (B, n_track, d_model)
         track = self.projection(track) + self.track_pos_embed
-        
+
         indices = torch.arange(self.n_waypoints).to(device=track.device)
         # output shape: (n_waypoint, d_model)
         query = self.query_embed(indices)
-        
+
         # Add the batch dim: (1, n_waypoint, d_model)
         query = query.unsqueeze(0)
         # Repeat on the batch dim: (B, n_waypoint, d_model)
@@ -200,15 +196,58 @@ class TransformerPlanner(nn.Module):
         x = self.resizer(query)
         return x
 
-# if __name__ == "__main__":
-#     tp = TransformerPlanner()
-#     print(tp)
-#     tp.forward(torch.rand(2, 10, 2), torch.rand(2, 10, 2))
+class DBlock(torch.nn.Module):
+    def __init__(self, in_channels, kernel_size, stride=2, layers=3):
+        super().__init__()
+
+        self.conv_layer = torch.nn.Conv2d(
+            in_channels, in_channels * stride, kernel_size, stride, padding=(kernel_size - 1) // 2
+        )
+
+        # Create nested Blocks up to `layers` layers
+        if layers >= 1:
+            self.next_block = DBlock(in_channels * stride, kernel_size, stride, layers - 1)
+            # to reduce channel count after skip connection. runs after upconv
+            self.reduce_channels = torch.nn.Conv2d(in_channels * 2, in_channels, kernel_size=3, padding=1)
+        else:
+            self.next_block = torch.nn.Identity()
+            self.reduce_channels = torch.nn.Identity()
+
+        self.norm = torch.nn.BatchNorm2d(in_channels * stride)
+        self.upconv_layer = torch.nn.ConvTranspose2d(
+            in_channels * stride, in_channels, kernel_size, stride, padding=(kernel_size - 1) // 2, output_padding=1
+        )
+        # shape: b, b, in_channels, w, h
+
+        self.relu = torch.nn.ReLU()
+        self.skip = torch.nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        skip = x
+
+        y = self.conv_layer(x)
+        y = self.relu(y)
+
+        y = self.next_block(y)
+        y = self.norm(y)
+        y = self.relu(y)
+
+        y = self.upconv_layer(y)[:, :, : x.shape[2], : x.shape[3]]
+
+        if not isinstance(self.next_block, torch.nn.Identity):
+            y = torch.cat([y, skip], dim=1)
+            y = self.reduce_channels(y)
+        return y
+
 
 class CNNPlanner(torch.nn.Module):
     def __init__(
         self,
         n_waypoints: int = 3,
+        in_channels: int = 3,
+        kernel_size=3,
+        block_size=16,
+        block_layers=3,
     ):
         super().__init__()
 
@@ -216,6 +255,33 @@ class CNNPlanner(torch.nn.Module):
 
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
+
+        # output size: b, block_size, w, h
+        self.block = torch.nn.Sequential(
+            torch.nn.Conv2d(in_channels, block_size, kernel_size, padding=(kernel_size - 1) // 2),
+            torch.nn.ReLU(),
+            DBlock(block_size, kernel_size, stride=2, layers=block_layers),
+            torch.nn.ReLU(),
+        )
+
+        c = block_size
+        
+        self.dropout = torch.nn.Dropout(0.5) # Dropout layer with a 50% drop rate
+        
+        # output size: b, n_waypoints, w, h
+        self.squeeze_channels = torch.nn.Sequential(
+            torch.nn.Conv2d(c, c // 2, kernel_size=kernel_size, padding=(kernel_size - 1) // 2),
+            torch.nn.ReLU(),
+            torch.nn.BatchNorm2d(c // 2),
+            torch.nn.Conv2d(c // 2, n_waypoints, kernel_size=kernel_size, padding=(kernel_size - 1) // 2),
+            torch.nn.ReLU(),
+            torch.nn.BatchNorm2d(n_waypoints),
+        )
+        self.flatten_dims = torch.nn.Sequential(
+            torch.nn.AdaptiveAvgPool2d((1, 2)),
+            torch.nn.Flatten(start_dim=2, end_dim=3),
+        )
+        
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
         """
@@ -227,9 +293,11 @@ class CNNPlanner(torch.nn.Module):
         """
         x = image
         x = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
-
-        raise NotImplementedError
-
+        
+        x = self.dropout(self.block(x)) # shape: (b, block_size, w, h)
+        x = self.squeeze_channels(x) # shape: (b, n_waypoints, w, h)
+        y = self.flatten_dims(x) # shape: (b, n_waypoints, 2)
+        return y
 
 MODEL_FACTORY = {
     "mlp_planner": MLPPlanner,
