@@ -7,9 +7,9 @@ import torch.utils.tensorboard as tb
 
 from datetime import datetime
 from pathlib import Path
-from models import load_model, save_model
-from metrics import PlannerMetric
-from datasets.road_dataset import load_data
+from .models import load_model, save_model
+from .metrics import PlannerMetric
+from .datasets.road_dataset import load_data
 
 
 def train(exp_dir: str = "cnn_logs", num_epoch=10, batch_size=128, lr=0.05):
@@ -35,13 +35,13 @@ def train(exp_dir: str = "cnn_logs", num_epoch=10, batch_size=128, lr=0.05):
         shuffle=True,
         batch_size=batch_size,
         num_workers=4,
-        transform_pipeline="aug",
+        # transform_pipeline="aug",
     )
     val_data = load_data("../drive_data/val", shuffle=False)
 
     loss_func = torch.nn.L1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.25)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.2)
 
     global_step = 0
     train_metric_computer = PlannerMetric()
@@ -65,6 +65,7 @@ def train(exp_dir: str = "cnn_logs", num_epoch=10, batch_size=128, lr=0.05):
             # don't calculate loss on masked out waypoints
             waypoints_masked = waypoints * waypoints_mask.unsqueeze(-1)
             out_masked = out * waypoints_mask.unsqueeze(-1)
+    
             loss_val = loss_func(out_masked, waypoints_masked)
             loss_val.backward()
             
