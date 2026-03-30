@@ -120,9 +120,9 @@ class TransformerPlanner(nn.Module):
         self,
         n_track: int = 10,
         n_waypoints: int = 3,
-        d_model: int = 32,
+        d_model: int = 48,
         num_heads=8,
-        n_blocks=15,
+        n_blocks=10,
     ):
         super().__init__()
 
@@ -151,7 +151,7 @@ class TransformerPlanner(nn.Module):
             )
             self.blocks.append(TransformerPlanner.Block(d_model, num_heads))
 
-        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=num_heads, batch_first=True, norm_first=True)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=num_heads, dropout=0, batch_first=True, norm_first=True)
         self.transformer = nn.TransformerDecoder(decoder_layer, n_blocks)
 
         self.resizer = nn.Linear(d_model, 2)
@@ -246,8 +246,8 @@ class CNNPlanner(torch.nn.Module):
         n_waypoints: int = 3,
         in_channels: int = 3,
         kernel_size=3,
-        block_size=16,
-        block_layers=3,
+        block_size=9,
+        block_layers=5,
     ):
         super().__init__()
 
@@ -271,6 +271,9 @@ class CNNPlanner(torch.nn.Module):
         # output size: b, n_waypoints, w, h
         self.squeeze_channels = torch.nn.Sequential(
             torch.nn.Conv2d(c, c // 2, kernel_size=kernel_size, padding=(kernel_size - 1) // 2),
+            torch.nn.ReLU(),
+            torch.nn.BatchNorm2d(c // 2),
+            torch.nn.Conv2d(c // 2, c // 2, kernel_size=kernel_size, padding=(kernel_size - 1) // 2),
             torch.nn.ReLU(),
             torch.nn.BatchNorm2d(c // 2),
             torch.nn.Conv2d(c // 2, n_waypoints, kernel_size=kernel_size, padding=(kernel_size - 1) // 2),
